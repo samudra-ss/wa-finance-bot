@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wa-finance-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wa_finance
+    ports:
+      # 5433 on the host so this never clashes with an existing local Postgres
+      - "5433:5432"
+    volumes:
+      - wa-finance-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wa_finance"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  wa-finance-pgdata:

@@ -1,0 +1,167 @@
+// WA finance bot schema. Every amount field is BigInt rupiah — IDR has no
+// usable subunit, so integers are exact and cheap (no NUMERIC/float issues).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  DEBT
+  RECEIVABLE
+}
+
+enum TxSource {
+  WHATSAPP
+  APP
+}
+
+enum CategoryKind {
+  INCOME
+  EXPENSE
+}
+
+enum LoanDirection {
+  UTANG
+  PIUTANG
+}
+
+model User {
+  id           String        @id @default(cuid())
+  waId         String        @unique // WhatsApp wa_id, e.g. "6281234567890"
+  phone        String
+  name         String?
+  tz           String        @default("Asia/Jakarta")
+  weeklyOptIn  Boolean       @default(true) // Sunday summary opt-out ("stop")
+  createdAt    DateTime      @default(now())
+  accounts     Account[]
+  categories   Category[]
+  transactions Transaction[]
+  budgets      Budget[]
+  goals        Goal[]
+  loans        Loan[]
+}
+
+model Account {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  aliases      String[]      @default([])
+  balance      BigInt        @default(0) // running balance, updated atomically with each transaction
+  isDefault    Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  transactions Transaction[] @relation("AccountTx")
+  transfersIn  Transaction[] @relation("CounterAccountTx")
+  goal         Goal?
+
+  @@unique([userId, name])
+}
+
+model Category {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  kind         CategoryKind
+  aliases      String[]      @default([])
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@unique([userId, name])
+}
+
+model Transaction {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type             TxType
+  amount           BigInt // always positive; type decides the sign of the balance effect
+  categoryId       String?
+  category         Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  accountId        String?
+  account          Account?  @relation("AccountTx", fields: [accountId], references: [id], onDelete: SetNull)
+  counterAccountId String? // destination account for TRANSFER
+  counterAccount   Account?  @relation("CounterAccountTx", fields: [counterAccountId], references: [id], onDelete: SetNull)
+  note             String?
+  source           TxSource  @default(WHATSAPP)
+  waMessageId      String?   @unique // WhatsApp wamid — webhook idempotency key
+  occurredAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  deletedAt        DateTime? // soft delete ("undo")
+
+  @@index([userId, occurredAt])
+  @@index([userId, categoryId, occurredAt])
+}
+
+model Budget {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  month      String // "YYYY-MM" in the user's timezone
+  limit      BigInt
+
+  @@unique([userId, categoryId, month])
+}
+
+model Goal {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  target    BigInt
+  saved     BigInt    @default(0)
+  deadline  DateTime?
+  accountId String?   @unique // optional link to a dedicated goal-account (umroh, pendidikan anak, ...)
+  account   Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  createdAt DateTime  @default(now())
+}
+
+// Dashboard login. The user texts "login" to the bot, which both proves they
+// control the WhatsApp number AND opens the free 24h service window, so the
+// code goes out as a normal free-form message — no approved template needed.
+model LoginCode {
+  id        String    @id @default(cuid())
+  waId      String
+  codeHash  String // sha256, never the code itself
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([waId, expiresAt])
+}
+
+// Webhook idempotency gate: Meta retries deliveries, and commands (utang,
+// piutang, target, budget) don't create a Transaction row that could carry the
+// unique wamid — so every inbound message is recorded here first.
+model ProcessedMessage {
+  wamid      String   @id // WhatsApp message id
+  waId       String
+  receivedAt DateTime @default(now())
+}
+
+model Loan {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  direction         LoanDirection // UTANG = I owe them, PIUTANG = they owe me
+  counterpartyName  String
+  counterpartyPhone String?
+  principal         BigInt
+  remaining         BigInt
+  dueDate           DateTime?
+  createdAt         DateTime      @default(now())
+  settledAt         DateTime?
+
+  @@index([userId, dueDate])
+}

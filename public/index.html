@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="description" content="Dashboard keuangan pribadi dari catatan WhatsApp" />
+    <title>Keuangan Saya</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- ---------------- Login ---------------- -->
+    <section id="login" class="login hidden">
+      <div class="login-card">
+        <div class="brand">
+          <span class="brand-mark">Rp</span>
+          <h1>Keuangan Saya</h1>
+          <p class="muted">Dashboard dari catatan WhatsApp kamu</p>
+        </div>
+
+        <ol class="steps">
+          <li>Kirim <b>login</b> ke bot WhatsApp kamu</li>
+          <li>Bot membalas dengan kode 6 digit</li>
+          <li>Masukkan nomor &amp; kode di bawah ini</li>
+        </ol>
+
+        <form id="login-form" autocomplete="on">
+          <label for="phone">Nomor WhatsApp</label>
+          <input
+            id="phone"
+            name="phone"
+            type="tel"
+            inputmode="numeric"
+            placeholder="0812xxxxxxx"
+            autocomplete="tel"
+            required
+          />
+
+          <label for="code">Kode dari bot</label>
+          <input
+            id="code"
+            name="code"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="6"
+            placeholder="123456"
+            autocomplete="one-time-code"
+            required
+          />
+
+          <button type="submit" id="login-btn">Masuk</button>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------------- App ---------------- -->
+    <div id="app" class="hidden">
+      <header class="topbar">
+        <div>
+          <p class="muted small" id="greeting">Halo</p>
+          <h1 id="page-title">Ringkasan</h1>
+        </div>
+        <button id="refresh" class="icon-btn" title="Muat ulang" aria-label="Muat ulang">⟳</button>
+      </header>
+
+      <main id="views">
+        <!-- Ringkasan -->
+        <section class="view" data-view="dashboard">
+          <div class="hero card">
+            <p class="muted small">Kekayaan bersih</p>
+            <p class="hero-amount" id="net-worth">—</p>
+            <div class="hero-split">
+              <div><span class="muted small">Kas</span><b id="cash">—</b></div>
+              <div><span class="muted small">Piutang</span><b id="piutang" class="pos">—</b></div>
+              <div><span class="muted small">Utang</span><b id="utang" class="neg">—</b></div>
+            </div>
+            <div id="level-badge" class="level"></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card stat">
+              <p class="muted small">Pemasukan bulan ini</p>
+              <p class="stat-amount pos" id="income">—</p>
+            </div>
+            <div class="card stat">
+              <p class="muted small">Pengeluaran bulan ini</p>
+              <p class="stat-amount neg" id="expense">—</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Pengeluaran per kategori</h2>
+            <div id="donut-wrap" class="donut-wrap"></div>
+            <ul id="category-list" class="cat-list"></ul>
+          </div>
+
+          <div class="card">
+            <h2>Saldo rekening</h2>
+            <ul id="account-list" class="rows"></ul>
+          </div>
+
+          <div class="card">
+            <h2>Transaksi terakhir</h2>
+            <ul id="recent-list" class="rows"></ul>
+            <button class="link-btn" data-goto="transactions">Lihat semua →</button>
+          </div>
+        </section>
+
+        <!-- Transaksi -->
+        <section class="view hidden" data-view="transactions">
+          <div class="chips" id="tx-filters">
+            <button class="chip active" data-type="">Semua</button>
+            <button class="chip" data-type="EXPENSE">Pengeluaran</button>
+            <button class="chip" data-type="INCOME">Pemasukan</button>
+            <button class="chip" data-type="TRANSFER">Pindah kas</button>
+          </div>
+          <div class="card">
+            <ul id="tx-list" class="rows"></ul>
+            <button id="tx-more" class="link-btn hidden">Muat lebih banyak</button>
+          </div>
+        </section>
+
+        <!-- Utang & Piutang -->
+        <section class="view hidden" data-view="loans">
+          <div class="chips" id="loan-tabs">
+            <button class="chip active" data-dir="PIUTANG">Piutang (ke saya)</button>
+            <button class="chip" data-dir="UTANG">Utang (saya bayar)</button>
+          </div>
+          <div id="loan-list"></div>
+        </section>
+
+        <!-- Target -->
+        <section class="view hidden" data-view="goals">
+          <div id="goal-list"></div>
+        </section>
+
+        <!-- Saran -->
+        <section class="view hidden" data-view="advisor">
+          <div class="card">
+            <h2>Skor kesehatan finansial</h2>
+            <div id="gauge-wrap" class="gauge-wrap"></div>
+            <ul id="check-list" class="checks"></ul>
+          </div>
+          <div class="card">
+            <h2>Budget bulan ini</h2>
+            <div id="budget-list"></div>
+          </div>
+          <div class="card tips">
+            <h2>Saran</h2>
+            <ul id="tips-list" class="tips-list"></ul>
+          </div>
+        </section>
+      </main>
+
+      <nav class="tabbar">
+        <button class="tab active" data-view="dashboard"><span>▤</span>Ringkasan</button>
+        <button class="tab" data-view="transactions"><span>≡</span>Transaksi</button>
+        <button class="tab" data-view="loans"><span>⇄</span>Utang</button>
+        <button class="tab" data-view="goals"><span>◎</span>Target</button>
+        <button class="tab" data-view="advisor"><span>♥</span>Saran</button>
+      </nav>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
