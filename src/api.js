@@ -36,10 +36,13 @@ function monthRange(month) {
 // ------------------------------------------------------------------ auth
 
 api.post('/auth/verify', async (req, res) => {
-  const waId = normalizePhone(req.body?.phone);
+  // Magic link (Telegram or WhatsApp) sends the exact identity; the manual form
+  // sends a phone number that we normalize to the wa_id form.
+  const rawIdentity = typeof req.body?.identity === 'string' ? req.body.identity.trim() : '';
+  const waId = rawIdentity || normalizePhone(req.body?.phone);
   const code = String(req.body?.code ?? '').replace(/\D/g, '');
   if (!waId || code.length !== 6) {
-    return res.status(400).json({ error: 'Nomor dan kode 6 digit wajib diisi.' });
+    return res.status(400).json({ error: 'Data login tidak lengkap. Kirim "login" lagi ke bot.' });
   }
   try {
     const result = await redeemLoginCode(waId, code);

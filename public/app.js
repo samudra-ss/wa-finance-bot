@@ -136,6 +136,29 @@ async function handleLoginSubmit(e) {
   }
 }
 
+// One-tap login: the bot sends a link like /?id=<identity>&code=<code>. If those
+// params are present, log in automatically and scrub them from the URL.
+async function tryMagicLogin() {
+  const p = new URLSearchParams(location.search);
+  const identity = p.get('id');
+  const code = p.get('code');
+  if (!identity || !code) return false;
+  try {
+    const body = await api('/auth/verify', { method: 'POST', body: JSON.stringify({ identity, code }) });
+    state.token = body.token;
+    localStorage.setItem(TOKEN_KEY, body.token);
+    history.replaceState(null, '', location.pathname); // don't leave the code in the address bar
+    showApp();
+    await loadDashboard();
+    return true;
+  } catch (err) {
+    history.replaceState(null, '', location.pathname);
+    const errEl = $('#login-error');
+    if (errEl) errEl.textContent = err.message;
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- dashboard render
 
 function renderHero(d) {
@@ -221,7 +244,12 @@ function txRow(t) {
   const cls = t.type === 'INCOME' ? 'pos' : t.type === 'EXPENSE' ? 'neg' : '';
   const label = t.category || (t.type === 'TRANSFER' ? 'Pindah kas' : 'Lainnya');
   const sub = [t.account, relTime(t.occurredAt)].filter(Boolean).join(' · ');
-  const badge = t.source === 'WHATSAPP' ? '<span class="wa-tag">WA</span>' : '';
+  const badge =
+    t.source === 'WHATSAPP'
+      ? '<span class="wa-tag">WA</span>'
+      : t.source === 'TELEGRAM'
+        ? '<span class="wa-tag">TG</span>'
+        : '';
   return `<li>
     <div class="row-main">
       <div class="row-title">${escapeHtml(label)}${badge}</div>
@@ -506,6 +534,15 @@ function init() {
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  const params = new URLSearchParams(location.search);
+  if (params.get('id') && params.get('code')) {
+    showLogin(); // shown briefly; replaced by the app on success
+    tryMagicLogin().then((ok) => {
+      if (!ok && !state.token) showLogin();
+    });
+    return;
   }
 
   const cached = sessionStorage.getItem(CACHE_KEY);

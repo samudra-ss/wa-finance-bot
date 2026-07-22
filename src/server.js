@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pino from 'pino';
 import { handleWebhook } from './webhook-handler.js';
+import { handleTelegramUpdate } from './telegram-handler.js';
+import { registerTelegramWebhook } from './telegram.js';
 import { startWeeklySummaryJob } from './weekly-summary.js';
 import { api } from './api.js';
 
@@ -89,8 +91,21 @@ function verifySignature(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Telegram webhook. Telegram echoes TG_WEBHOOK_SECRET in this header on every
+// call, so a mismatch means the request didn't come from Telegram — reject it.
+app.post('/telegram/webhook', express.json({ limit: '256kb' }), (req, res) => {
+  const secret = process.env.TG_WEBHOOK_SECRET;
+  if (secret && req.get('x-telegram-bot-api-secret-token') !== secret) {
+    log.warn('rejected Telegram webhook: bad secret token');
+    return res.sendStatus(401);
+  }
+  res.sendStatus(200); // ack fast; Telegram retries on non-200
+  handleTelegramUpdate(req.body).catch((err) => log.error({ err }, 'async Telegram processing failed'));
+});
+
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   log.info(`wa-finance-bot backend listening on :${port}`);
   startWeeklySummaryJob();
+  registerTelegramWebhook(); // no-op unless TG_BOT_TOKEN + public APP_PUBLIC_URL are set
 });

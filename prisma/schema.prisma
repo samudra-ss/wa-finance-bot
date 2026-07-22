@@ -20,6 +20,7 @@ enum TxType {
 
 enum TxSource {
   WHATSAPP
+  TELEGRAM
   APP
 }
 
@@ -35,7 +36,7 @@ enum LoanDirection {
 
 model User {
   id           String        @id @default(cuid())
-  waId         String        @unique // WhatsApp wa_id, e.g. "6281234567890"
+  waId         String        @unique // channel identity: WhatsApp wa_id "6281234567890", or Telegram "tg:<chatId>"
   phone        String
   name         String?
   tz           String        @default("Asia/Jakarta")

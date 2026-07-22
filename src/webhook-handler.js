@@ -1,3 +1,17 @@
+// Channel-agnostic message router.
+//
+// Both WhatsApp and Telegram feed the SAME logic through a small `ctx` object:
+//   { channel, identity, externalId, text, name, reply(text), user }
+// - channel:    'WHATSAPP' | 'TELEGRAM'  (stored on Transaction.source)
+// - identity:   the User.waId key — phone for WhatsApp, "tg:<chatId>" for Telegram
+// - externalId: unique per inbound message, used for idempotency
+// - reply:      async (text) => void, bound to the right channel's send API
+// - user:       attached after lookup/registration
+//
+// handleWebhook()   — WhatsApp (Meta Cloud API) adapter, builds ctx, calls handleInbound.
+// handleInbound()   — shared: dedup, user lookup/register, route. Also called by
+//                     src/telegram-handler.js.
+
 import pino from 'pino';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db.js';
@@ -12,14 +26,16 @@ import {
 import { sendText, formatIDR } from './whatsapp.js';
 import { issueLoginCode } from './auth.js';
 
-const log = pino({ name: 'webhook', level: process.env.LOG_LEVEL || 'info' });
+const log = pino({ name: 'router', level: process.env.LOG_LEVEL || 'info' });
 const TZ = 'Asia/Jakarta';
 const DAY_MS = 86_400_000;
 
 const DUE_RE = /jatuh\s+tempo\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/i;
 const DATE_RE = /tanggal\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/i;
 
-/** Entry point: unwraps the Cloud API envelope entry[].changes[].value. */
+// ---------------------------------------------------------------- WhatsApp adapter
+
+/** Unwraps the Meta Cloud API envelope entry[].changes[].value and routes each message. */
 export async function handleWebhook(payload) {
   for (const entry of payload?.entry ?? []) {
     for (const change of entry.changes ?? []) {
@@ -27,115 +43,120 @@ export async function handleWebhook(payload) {
       if (!value) continue;
       if (value.statuses) continue; // sent/delivered/read callbacks — ignore
       for (const message of value.messages ?? []) {
+        if (message.type !== 'text' || !message.text?.body) {
+          await sendText(message.from, 'Maaf, untuk sekarang aku hanya bisa membaca pesan teks. Contoh: "makan siang 50rb"').catch(() => {});
+          continue;
+        }
         const contact =
           (value.contacts ?? []).find((c) => c.wa_id === message.from) ?? value.contacts?.[0] ?? null;
+        const ctx = {
+          channel: 'WHATSAPP',
+          identity: message.from,
+          externalId: message.id,
+          text: message.text.body.trim(),
+          name: contact?.profile?.name ?? null,
+          reply: (t) => sendText(message.from, t),
+        };
         try {
-          await handleMessage(message, contact);
+          await handleInbound(ctx);
         } catch (err) {
-          log.error({ err, messageId: message.id }, 'failed to handle message');
+          log.error({ err, externalId: ctx.externalId }, 'failed to handle message');
         }
       }
     }
   }
 }
 
-async function handleMessage(message, contact) {
-  const waId = message.from;
+// ---------------------------------------------------------------- shared core
 
-  if (message.type !== 'text' || !message.text?.body) {
-    await sendText(waId, 'Maaf, untuk sekarang aku hanya bisa membaca pesan teks. Contoh: "makan siang 50rb"');
-    return;
-  }
-  const text = message.text.body.trim();
-
-  // Idempotency gate: Meta retries webhook deliveries (and commands like
-  // "utang Budi 200rb" don't produce a Transaction row that could carry the
-  // unique wamid), so every message is claimed here first. On a processing
-  // error the claim is released so Meta's retry gets another attempt.
+/** Dedup by externalId, then route. Shared by both channels. */
+export async function handleInbound(ctx) {
+  // Idempotency gate: retried deliveries (and commands that create no Transaction
+  // row) are claimed here first. Released on a processing error so a retry works.
   try {
-    await prisma.processedMessage.create({ data: { wamid: message.id, waId } });
+    await prisma.processedMessage.create({ data: { wamid: ctx.externalId, waId: ctx.identity } });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      log.info({ messageId: message.id }, 'duplicate webhook delivery, skipped');
+      log.info({ externalId: ctx.externalId }, 'duplicate delivery, skipped');
       return;
     }
     throw err;
   }
 
   try {
-    await routeMessage(waId, message, contact, text);
+    await routeMessage(ctx);
   } catch (err) {
-    await prisma.processedMessage.delete({ where: { wamid: message.id } }).catch(() => {});
+    await prisma.processedMessage.delete({ where: { wamid: ctx.externalId } }).catch(() => {});
     throw err;
   }
 }
 
-async function routeMessage(waId, message, contact, text) {
+async function routeMessage(ctx) {
   let user = await prisma.user.findUnique({
-    where: { waId },
+    where: { waId: ctx.identity },
     include: { categories: true, accounts: true },
   });
   if (!user) {
     if (process.env.ALLOW_AUTO_REGISTER !== 'true') {
-      await sendText(waId, 'Nomor kamu belum terdaftar. Hubungi admin untuk mendaftar ya.');
+      await ctx.reply('Kamu belum terdaftar. Hubungi admin untuk mendaftar ya.');
       return;
     }
-    user = await registerUser(waId, contact);
-    await sendText(waId, `Halo ${user.name ?? 'kak'}! Akun kamu sudah dibuat 🎉\n\n${HELP_TEXT}`);
+    user = await registerUser(ctx.identity, ctx.name);
+    await ctx.reply(`Halo ${user.name ?? 'kak'}! Akun kamu sudah dibuat 🎉\n\n${HELP_TEXT}`);
   }
+  ctx.user = user;
 
   // ---- Tier 0: command router ----
-  const lower = text.toLowerCase();
-  if (lower === 'saldo') return replySaldo(user);
-  if (lower === 'help' || lower === 'bantuan' || lower === 'menu') return sendText(waId, HELP_TEXT);
-  if (lower === 'undo' || lower === 'hapus') return undoLast(user);
-  if (lower === 'budget') return replyBudgets(user);
-  if (lower.startsWith('budget ')) return setBudget(user, text);
-  if (lower === 'login' || lower === 'masuk') return sendLoginCode(user);
-  if (lower === 'stop' || lower === 'berhenti') return setWeeklyOptIn(user, false);
-  if (lower === 'mulai' || lower === 'lanjut') return setWeeklyOptIn(user, true);
-  if (/^(transfer|pindah)\s/.test(lower)) return doTransfer(user, message, text);
+  const lower = ctx.text.toLowerCase();
+  if (lower === 'saldo') return replySaldo(ctx);
+  if (lower === 'help' || lower === 'bantuan' || lower === 'menu') return ctx.reply(HELP_TEXT);
+  if (lower === 'undo' || lower === 'hapus') return undoLast(ctx);
+  if (lower === 'budget') return replyBudgets(ctx);
+  if (lower.startsWith('budget ')) return setBudget(ctx);
+  if (lower === 'login' || lower === 'masuk') return sendLoginCode(ctx);
+  if (lower === 'stop' || lower === 'berhenti') return setWeeklyOptIn(ctx, false);
+  if (lower === 'mulai' || lower === 'lanjut') return setWeeklyOptIn(ctx, true);
+  if (/^(transfer|pindah)\s/.test(lower)) return doTransfer(ctx);
   const loanMatch = lower.match(/^(utang|piutang)\s/);
-  if (loanMatch) return createLoan(user, text, loanMatch[1]);
-  if (lower.startsWith('target ')) return createGoal(user, text);
+  if (loanMatch) return createLoan(ctx, loanMatch[1]);
+  if (lower.startsWith('target ')) return createGoal(ctx);
 
   // ---- Tier 1: deterministic transaction parser ----
-  return logTransaction(user, message, text);
+  return logTransaction(ctx);
 }
 
-// The user just messaged us, so the 24h service window is open and this code
-// goes out as a free free-form message — no approved template required.
-async function sendLoginCode(user) {
-  const code = await issueLoginCode(user.waId);
-  const url = process.env.APP_PUBLIC_URL || 'http://localhost:3000';
-  await sendText(
-    user.waId,
+// The user just messaged us, so (on WhatsApp) the 24h window is open and this
+// goes out free-form. The magic link logs them in with one tap on either channel.
+async function sendLoginCode(ctx) {
+  const code = await issueLoginCode(ctx.user.waId);
+  const base = (process.env.APP_PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const link = `${base}/?id=${encodeURIComponent(ctx.user.waId)}&code=${code}`;
+  await ctx.reply(
     [
-      `🔐 Kode login dashboard: *${code}*`,
+      `🔐 Kode login dashboard: ${code}`,
       '',
-      'Berlaku 5 menit. Jangan bagikan kode ini ke siapa pun.',
-      `Buka: ${url}`,
+      'Berlaku 5 menit. Jangan bagikan ke siapa pun.',
+      `Buka (tap): ${link}`,
     ].join('\n'),
   );
 }
 
-async function setWeeklyOptIn(user, optIn) {
-  await prisma.user.update({ where: { id: user.id }, data: { weeklyOptIn: optIn } });
-  await sendText(
-    user.waId,
+async function setWeeklyOptIn(ctx, optIn) {
+  await prisma.user.update({ where: { id: ctx.user.id }, data: { weeklyOptIn: optIn } });
+  await ctx.reply(
     optIn
       ? 'Oke, ringkasan mingguan aktif lagi setiap Minggu sore. 📊'
       : 'Ringkasan mingguan dimatikan. Ketik "mulai" kapan saja untuk mengaktifkan lagi.',
   );
 }
 
-async function registerUser(waId, contact) {
+async function registerUser(identity, name) {
   try {
     const user = await prisma.user.create({
       data: {
-        waId,
-        phone: waId,
-        name: contact?.profile?.name ?? null,
+        waId: identity,
+        phone: identity,
+        name: name ?? null,
         categories: {
           create: DEFAULT_CATEGORIES.map((c) => ({ name: c.name, kind: c.kind, aliases: c.aliases })),
         },
@@ -149,12 +170,12 @@ async function registerUser(waId, contact) {
       },
       include: { categories: true, accounts: true },
     });
-    log.info({ waId, userId: user.id }, 'auto-registered new user');
+    log.info({ identity, userId: user.id }, 'auto-registered new user');
     return user;
   } catch (err) {
     // Two first-messages racing: the loser of the unique(waId) race reuses the row.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return prisma.user.findUnique({ where: { waId }, include: { categories: true, accounts: true } });
+      return prisma.user.findUnique({ where: { waId: identity }, include: { categories: true, accounts: true } });
     }
     throw err;
   }
@@ -162,13 +183,14 @@ async function registerUser(waId, contact) {
 
 // ---------------------------------------------------------------- transactions
 
-async function logTransaction(user, message, text) {
-  const parsed = parseMessage(text, user.categories, user.accounts);
+async function logTransaction(ctx) {
+  const user = ctx.user;
+  const parsed = parseMessage(ctx.text, user.categories, user.accounts);
   if (!parsed.ok) {
     if (parsed.reason === 'AMBIGUOUS_AMOUNT') {
-      await sendText(user.waId, 'Aku menemukan lebih dari satu angka 😅 Tulis satu nominal saja ya, contoh: "makan siang 50rb"');
+      await ctx.reply('Aku menemukan lebih dari satu angka 😅 Tulis satu nominal saja ya, contoh: "makan siang 50rb"');
     } else {
-      await sendText(user.waId, `Hmm, aku belum paham pesan itu.\n\n${HELP_TEXT}`);
+      await ctx.reply(`Hmm, aku belum paham pesan itu.\n\n${HELP_TEXT}`);
     }
     return;
   }
@@ -187,8 +209,8 @@ async function logTransaction(user, message, text) {
         categoryId: category?.id ?? null,
         accountId: account?.id ?? null,
         note: parsed.note,
-        source: 'WHATSAPP',
-        waMessageId: message.id,
+        source: ctx.channel,
+        waMessageId: ctx.externalId,
         occurredAt,
       },
     }),
@@ -201,7 +223,7 @@ async function logTransaction(user, message, text) {
     await prisma.$transaction(ops); // ledger row + running balance, atomically
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      log.info({ messageId: message.id }, 'duplicate transaction insert, skipped');
+      log.info({ externalId: ctx.externalId }, 'duplicate transaction insert, skipped');
       return;
     }
     throw err;
@@ -217,16 +239,17 @@ async function logTransaction(user, message, text) {
   if (!parsed.category) {
     lines.push('Kategori tidak dikenali, kucatat sebagai "Lainnya". Balas "undo" kalau salah.');
   }
-  await sendText(user.waId, lines.join('\n'));
+  await ctx.reply(lines.join('\n'));
 }
 
-async function undoLast(user) {
+async function undoLast(ctx) {
+  const user = ctx.user;
   const tx = await prisma.transaction.findFirst({
     where: { userId: user.id, deletedAt: null },
     orderBy: { createdAt: 'desc' },
     include: { category: true },
   });
-  if (!tx) return sendText(user.waId, 'Tidak ada transaksi yang bisa dibatalkan.');
+  if (!tx) return ctx.reply('Tidak ada transaksi yang bisa dibatalkan.');
 
   const ops = [prisma.transaction.update({ where: { id: tx.id }, data: { deletedAt: new Date() } })];
   if (tx.type === 'TRANSFER') {
@@ -241,19 +264,20 @@ async function undoLast(user) {
     ops.push(prisma.account.update({ where: { id: tx.accountId }, data: { balance: { increment: delta } } }));
   }
   await prisma.$transaction(ops);
-  await sendText(user.waId, `↩️ Dibatalkan: ${tx.category?.name ?? 'transaksi'} ${formatIDR(tx.amount)}`);
+  await ctx.reply(`↩️ Dibatalkan: ${tx.category?.name ?? 'transaksi'} ${formatIDR(tx.amount)}`);
 }
 
-async function doTransfer(user, message, text) {
+async function doTransfer(ctx) {
+  const user = ctx.user;
   const usage = 'Format: "transfer 500rb bca ke mandiri"';
-  const money = extractMoney(text);
-  if (money.error) return sendText(user.waId, usage);
-  const parts = text.toLowerCase().split(/(?<![a-z0-9])ke(?![a-z0-9])/);
-  if (parts.length !== 2) return sendText(user.waId, usage);
+  const money = extractMoney(ctx.text);
+  if (money.error) return ctx.reply(usage);
+  const parts = ctx.text.toLowerCase().split(/(?<![a-z0-9])ke(?![a-z0-9])/);
+  if (parts.length !== 2) return ctx.reply(usage);
   const from = matchAlias(parts[0], user.accounts)?.item;
   const to = matchAlias(parts[1], user.accounts)?.item;
   if (!from || !to || from.id === to.id) {
-    return sendText(user.waId, `Sebutkan rekening asal dan tujuan yang berbeda. ${usage}`);
+    return ctx.reply(`Sebutkan rekening asal dan tujuan yang berbeda. ${usage}`);
   }
   try {
     await prisma.$transaction([
@@ -264,9 +288,9 @@ async function doTransfer(user, message, text) {
           amount: money.amount,
           accountId: from.id,
           counterAccountId: to.id,
-          note: text,
-          source: 'WHATSAPP',
-          waMessageId: message.id,
+          note: ctx.text,
+          source: ctx.channel,
+          waMessageId: ctx.externalId,
         },
       }),
       prisma.account.update({ where: { id: from.id }, data: { balance: { decrement: money.amount } } }),
@@ -276,19 +300,19 @@ async function doTransfer(user, message, text) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return;
     throw err;
   }
-  await sendText(user.waId, `🔁 Pindah kas ${formatIDR(money.amount)}: ${from.name} → ${to.name}`);
+  await ctx.reply(`🔁 Pindah kas ${formatIDR(money.amount)}: ${from.name} → ${to.name}`);
 }
 
 // ---------------------------------------------------------------- balance & budget
 
-async function replySaldo(user) {
+async function replySaldo(ctx) {
   const accounts = await prisma.account.findMany({
-    where: { userId: user.id },
+    where: { userId: ctx.user.id },
     orderBy: { createdAt: 'asc' },
   });
   const total = accounts.reduce((sum, a) => sum + a.balance, 0n);
   const lines = accounts.map((a) => `• ${a.name}: ${formatIDR(a.balance)}`);
-  await sendText(user.waId, `💰 Saldo kamu:\n${lines.join('\n')}\nTotal: ${formatIDR(total)}`);
+  await ctx.reply(`💰 Saldo kamu:\n${lines.join('\n')}\nTotal: ${formatIDR(total)}`);
 }
 
 function monthKey(date = new Date()) {
@@ -337,14 +361,15 @@ async function remainingBudgetLine(user, category) {
     : `⚠️ Budget ${category.name} terlampaui ${formatIDR(-remaining)} (limit ${formatIDR(budget.limit)})`;
 }
 
-async function replyBudgets(user) {
+async function replyBudgets(ctx) {
+  const user = ctx.user;
   const month = monthKey();
   const budgets = await prisma.budget.findMany({
     where: { userId: user.id, month },
     include: { category: true },
   });
   if (budgets.length === 0) {
-    return sendText(user.waId, 'Belum ada budget bulan ini. Set dengan: "budget makan 2jt"');
+    return ctx.reply('Belum ada budget bulan ini. Set dengan: "budget makan 2jt"');
   }
   const lines = [];
   for (const b of budgets) {
@@ -352,19 +377,17 @@ async function replyBudgets(user) {
     const mark = spent > b.limit ? ' ⚠️' : '';
     lines.push(`• ${b.category.name}: ${formatIDR(spent)} / ${formatIDR(b.limit)}${mark}`);
   }
-  await sendText(user.waId, `📊 Budget ${month}:\n${lines.join('\n')}`);
+  await ctx.reply(`📊 Budget ${month}:\n${lines.join('\n')}`);
 }
 
-async function setBudget(user, text) {
-  const rest = text.slice('budget'.length);
+async function setBudget(ctx) {
+  const user = ctx.user;
+  const rest = ctx.text.slice('budget'.length);
   const money = extractMoney(rest);
-  if (money.error) return sendText(user.waId, 'Format: "budget makan 2jt"');
+  if (money.error) return ctx.reply('Format: "budget makan 2jt"');
   const catMatch = matchAlias(rest, user.categories);
   if (!catMatch) {
-    return sendText(
-      user.waId,
-      `Kategori tidak dikenali. Kategori kamu: ${user.categories.map((c) => c.name).join(', ')}`,
-    );
+    return ctx.reply(`Kategori tidak dikenali. Kategori kamu: ${user.categories.map((c) => c.name).join(', ')}`);
   }
   const month = monthKey();
   await prisma.budget.upsert({
@@ -372,7 +395,7 @@ async function setBudget(user, text) {
     create: { userId: user.id, categoryId: catMatch.item.id, month, limit: money.amount },
     update: { limit: money.amount },
   });
-  await sendText(user.waId, `📌 Budget ${catMatch.item.name} bulan ${month}: ${formatIDR(money.amount)}`);
+  await ctx.reply(`📌 Budget ${catMatch.item.name} bulan ${month}: ${formatIDR(money.amount)}`);
 }
 
 // ---------------------------------------------------------------- loans & goals
@@ -380,7 +403,6 @@ async function setBudget(user, text) {
 // Due dates and deadlines are CALENDAR dates, not instants, so they are stored
 // at UTC midnight. Storing WIB midnight instead would serialize as the PREVIOUS
 // day everywhere outside Asia/Jakarta ("25/8" reading back as Aug 24).
-// Always render these with formatDateOnly, never the user's timezone.
 function parseIndoDate(text, re) {
   const m = text.match(re);
   if (!m) return null;
@@ -400,15 +422,16 @@ function formatDateOnly(date) {
   return date.toLocaleDateString('id-ID', { timeZone: 'UTC' });
 }
 
-async function createLoan(user, text, direction) {
-  const rest = text.replace(/^(utang|piutang)\s+/i, '');
+async function createLoan(ctx, direction) {
+  const user = ctx.user;
+  const rest = ctx.text.replace(/^(utang|piutang)\s+/i, '');
   const dueDate = parseIndoDate(rest, DUE_RE);
   // Strip the date clause first, or its digits ("25/8") would make the
   // amount look ambiguous when the nominal has no rb/jt suffix.
   const cleaned = rest.replace(DUE_RE, ' ').trim();
   const money = extractMoney(cleaned);
   if (money.error) {
-    return sendText(user.waId, `Format: "${direction} Budi 200rb jatuh tempo 25/8"`);
+    return ctx.reply(`Format: "${direction} Budi 200rb jatuh tempo 25/8"`);
   }
   let name = cleaned.slice(0, money.index).trim();
   if (!name) name = cleaned.slice(money.index + money.raw.length).trim();
@@ -426,15 +449,16 @@ async function createLoan(user, text, direction) {
   });
   const label = loan.direction === 'UTANG' ? `Utang ke ${name}` : `Piutang dari ${name}`;
   const due = dueDate ? `, jatuh tempo ${formatDateOnly(dueDate)}` : '';
-  await sendText(user.waId, `📒 ${label}: ${formatIDR(money.amount)}${due}`);
+  await ctx.reply(`📒 ${label}: ${formatIDR(money.amount)}${due}`);
 }
 
-async function createGoal(user, text) {
-  const rest = text.replace(/^target\s+/i, '');
+async function createGoal(ctx) {
+  const user = ctx.user;
+  const rest = ctx.text.replace(/^target\s+/i, '');
   const deadline = parseIndoDate(rest, DATE_RE);
   const cleaned = rest.replace(DATE_RE, ' ').trim();
   const money = extractMoney(cleaned);
-  if (money.error) return sendText(user.waId, 'Format: "target liburan 5jt tanggal 31/12"');
+  if (money.error) return ctx.reply('Format: "target liburan 5jt tanggal 31/12"');
   let name = cleaned.slice(0, money.index).trim();
   if (!name) name = cleaned.slice(money.index + money.raw.length).trim();
   if (!name) name = 'Target';
@@ -443,5 +467,5 @@ async function createGoal(user, text) {
     data: { userId: user.id, name, target: money.amount, deadline },
   });
   const due = deadline ? ` sebelum ${formatDateOnly(deadline)}` : '';
-  await sendText(user.waId, `🎯 Target "${name}" ${formatIDR(money.amount)}${due} dibuat. Semangat nabung!`);
+  await ctx.reply(`🎯 Target "${name}" ${formatIDR(money.amount)}${due} dibuat. Semangat nabung!`);
 }
