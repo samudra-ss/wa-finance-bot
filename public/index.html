@@ -80,7 +80,14 @@
               <div><span class="muted small">Piutang</span><b id="piutang" class="pos">—</b></div>
               <div><span class="muted small">Utang</span><b id="utang" class="neg">—</b></div>
             </div>
-            <button type="button" id="level-badge" class="level" aria-haspopup="dialog"></button>
+            <button type="button" id="level-badge" class="level" aria-expanded="false" aria-controls="level-panel"></button>
+            <div id="level-panel" class="level-panel hidden">
+              <p class="level-panel-sub">
+                Berdasarkan format Excel <b>Finesse Wealth Checker</b>. Kamu naik level setelah
+                memenuhi syarat level di bawahnya.
+              </p>
+              <ol id="level-ladder" class="ladder"></ol>
+            </div>
           </div>
 
           <div class="grid-2">
@@ -165,22 +172,6 @@
         <button class="tab" data-view="goals"><span>◎</span>Target</button>
         <button class="tab" data-view="advisor"><span>♥</span>Saran</button>
       </nav>
-    </div>
-
-    <!-- ---------------- Level Kekayaan popup ---------------- -->
-    <div id="level-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="level-modal-title">
-      <div class="modal-backdrop" data-close></div>
-      <div class="modal-card" role="document">
-        <div class="modal-head">
-          <h2 id="level-modal-title">Level Kekayaan</h2>
-          <button type="button" class="modal-close" data-close aria-label="Tutup">×</button>
-        </div>
-        <p class="muted small modal-sub">
-          Berdasarkan format Excel <b>Finesse Wealth Checker</b>. Kamu naik level setelah
-          memenuhi syarat level di bawahnya.
-        </p>
-        <ol id="level-ladder" class="ladder"></ol>
-      </div>
     </div>
 
     <div id="toast" class="toast hidden"></div>

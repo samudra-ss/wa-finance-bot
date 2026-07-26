@@ -1,8 +1,13 @@
-// App-shell service worker. Caches ONLY static assets (HTML/CSS/JS/icons) so
-// the dashboard can open offline — /api/* is always network-only, since
-// financial data must never be readable from a stale disk cache after logout.
+// App-shell service worker.
+//
+// Strategy: NETWORK-FIRST for same-origin GETs, with the cache as an offline
+// fallback only. This means an online phone always gets the latest deploy — no
+// more "stuck on an old cached build" after we ship changes. The cache is
+// refreshed on every successful fetch so the app still opens offline.
+//
+// /api/* is never touched — financial data must never be served from disk cache.
 
-const CACHE = 'keuangan-shell-v1';
+const CACHE = 'keuangan-shell-v3';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
@@ -22,19 +27,17 @@ self.addEventListener('fetch', (event) => {
 
   // Never intercept the API or cross-origin requests — always hit the network.
   if (url.pathname.startsWith('/api/') || url.origin !== self.location.origin) return;
+  if (event.request.method !== 'GET') return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res.ok && event.request.method === 'GET') {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(event.request, copy));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    }),
+    fetch(event.request)
+      .then((res) => {
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(event.request)), // offline: fall back to the last cached copy
   );
 });

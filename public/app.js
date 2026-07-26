@@ -172,7 +172,7 @@ function renderHero(d) {
   const lvl = d.level;
   $('#level-badge').innerHTML =
     `<span class="level-main">${lvl.emoji} Level ${lvl.level} — ${escapeHtml(lvl.label)}<small>${escapeHtml(lvl.note)}</small></span>` +
-    '<span class="level-more">Detail ›</span>';
+    '<span class="level-more">Detail <span class="chev">▾</span></span>';
 }
 
 // ---------------------------------------------------------------- level popup
@@ -190,9 +190,10 @@ function renderLevelLadder() {
     .sort((a, b) => b.level - a.level)
     .map(
       (l) => `<li class="${l.current ? 'current' : ''}">
+        <span class="lvl-num">${l.level}</span>
         <span class="lvl-emoji">${l.emoji}</span>
         <span class="lvl-body">
-          <div class="lvl-title">Level ${l.level} — ${escapeHtml(l.label)}${l.current ? '<span class="here">Kamu di sini</span>' : ''}</div>
+          <div class="lvl-title">${escapeHtml(l.label)}${l.current ? '<span class="here">Kamu di sini</span>' : ''}</div>
           <div class="lvl-crit">${escapeHtml(l.criteria)}</div>
         </span>
       </li>`,
@@ -200,14 +201,21 @@ function renderLevelLadder() {
     .join('');
 }
 
-function openLevelModal() {
-  if (!state.dashboard?.levelLadder) return;
-  renderLevelLadder();
-  $('#level-modal').classList.remove('hidden');
+function toggleLevelPanel() {
+  const panel = $('#level-panel');
+  if (panel.classList.contains('hidden')) {
+    if (!state.dashboard?.levelLadder) return;
+    renderLevelLadder();
+    panel.classList.remove('hidden');
+    $('#level-badge').setAttribute('aria-expanded', 'true');
+  } else {
+    closeLevelPanel();
+  }
 }
 
-function closeLevelModal() {
-  $('#level-modal').classList.add('hidden');
+function closeLevelPanel() {
+  $('#level-panel').classList.add('hidden');
+  $('#level-badge').setAttribute('aria-expanded', 'false');
 }
 
 const PALETTE = ['#0f766e', '#f59e0b', '#6366f1', '#ec4899', '#0891b2', '#84cc16', '#a855f7', '#64748b'];
@@ -496,6 +504,8 @@ function renderAll(d) {
   renderGoals();
   renderAdvisor(d);
   $('#greeting').textContent = `Halo${d.userName ? ', ' + d.userName : ''} 👋`;
+  // Keep the level dropdown current if it happens to be open during a refresh.
+  if (!$('#level-panel').classList.contains('hidden')) renderLevelLadder();
 }
 
 function escapeHtml(s) {
@@ -569,14 +579,21 @@ function init() {
     }),
   );
 
-  $('#level-badge').addEventListener('click', openLevelModal);
-  $$('#level-modal [data-close]').forEach((el) => el.addEventListener('click', closeLevelModal));
+  $('#level-badge').addEventListener('click', toggleLevelPanel);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeLevelModal();
+    if (e.key === 'Escape') closeLevelPanel();
   });
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
+    // Auto-reload once when a new service worker takes control, so a fresh
+    // deploy is picked up without the user clearing anything manually.
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
   }
 
   const params = new URLSearchParams(location.search);
