@@ -179,13 +179,99 @@ main { padding: 14px 16px calc(84px + var(--safe-b)); }
 .hero-split .pos, .hero-split .neg { color: #fff; }
 .level {
   margin-top: 14px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 9px 12px;
+  border: 0;
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-family: inherit;
   font-size: 13px;
   font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
+.level:hover, .level:focus-visible { background: rgba(255, 255, 255, 0.26); outline: none; }
 .level small { display: block; font-weight: 400; opacity: 0.85; margin-top: 2px; }
+.level-more { flex: none; font-size: 12px; font-weight: 600; opacity: 0.9; white-space: nowrap; }
+
+/* ---------------- Modal (Level Kekayaan popup) ---------------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+@media (min-width: 560px) { .modal { align-items: center; } }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(16, 24, 40, 0.55); }
+.modal-card {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  max-height: 86dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -8px 30px rgba(16, 24, 40, 0.25);
+  padding: 20px 18px calc(20px + var(--safe-b));
+  animation: sheet-up 0.22s ease;
+}
+@media (min-width: 560px) { .modal-card { border-radius: var(--radius); } }
+@keyframes sheet-up { from { transform: translateY(16px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .modal-card { animation: none; } }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.modal-head h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 17px; font-weight: 700; }
+.modal-close {
+  flex: none;
+  width: 32px; height: 32px;
+  border: 0; border-radius: 9px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 20px; line-height: 1;
+  cursor: pointer;
+}
+.modal-close:hover { color: var(--text); }
+.modal-sub { margin: 6px 0 14px; }
+.modal-sub b { color: var(--brand); }
+
+.ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ladder li {
+  display: flex;
+  gap: 11px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.ladder li.current {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 1px var(--brand) inset;
+}
+.ladder .lvl-emoji { flex: none; font-size: 20px; line-height: 1.3; }
+.ladder .lvl-body { min-width: 0; }
+.ladder .lvl-title { font-weight: 700; font-size: 13.5px; }
+.ladder .lvl-title .here {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.ladder .lvl-crit { margin-top: 3px; font-size: 12px; color: var(--muted); line-height: 1.4; }
 
 .stat-amount { font-size: 19px; font-weight: 700; margin: 4px 0 0; }
 

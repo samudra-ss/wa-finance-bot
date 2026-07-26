@@ -5,7 +5,7 @@ import express from 'express';
 import pino from 'pino';
 import { prisma } from './db.js';
 import { redeemLoginCode, signToken, requireAuth } from './auth.js';
-import { healthCheck, wealthLevel, goalProjection } from './finance.js';
+import { healthCheck, wealthLevel, goalProjection, wealthLadder } from './finance.js';
 
 const log = pino({ name: 'api', level: process.env.LOG_LEVEL || 'info' });
 export const api = express.Router();
@@ -140,6 +140,7 @@ api.get('/dashboard', requireAuth, async (req, res, next) => {
       avgMonthlyExpense,
       health,
       level,
+      levelLadder: wealthLadder(level.level), // full 0-6 ladder for the popup
       accounts: accounts.map((a) => ({ id: a.id, name: a.name, balance: n(a.balance), isDefault: a.isDefault })),
       spending,
       budgets: budgets.map((b) => {

@@ -45,15 +45,22 @@ export function healthCheck(f) {
   };
 }
 
-const LEVELS = [
-  { level: 0, label: 'Pailit', emoji: '💥', note: 'Aset lebih kecil dari utang.' },
-  { level: 1, label: 'Terjerat utang', emoji: '🚨', note: 'Utang masih lebih besar dari kekayaan.' },
-  { level: 2, label: 'Terlihat kaya', emoji: '💅', note: 'Uang tunai lebih kecil dari utang.' },
-  { level: 3, label: 'Gaji ke gaji', emoji: '🔁', note: 'Belum punya dana darurat 1 bulan.' },
-  { level: 4, label: 'Punya dana darurat', emoji: '🛟', note: 'Dana darurat minimal 6 bulan pengeluaran.' },
-  { level: 5, label: 'Dana pensiun', emoji: '🌅', note: 'Aset cukup untuk biaya hidup sampai pensiun.' },
-  { level: 6, label: 'Punya warisan', emoji: '👑', note: 'Aset melebihi kebutuhan seumur hidup.' },
+// The "Level Kekayaan" ladder from the Excel. `note` is the short badge caption;
+// `criteria` is the exact gating condition, shown in the dashboard popup.
+export const LEVELS = [
+  { level: 0, label: 'Pailit', emoji: '💥', note: 'Aset lebih kecil dari utang.', criteria: 'Kekayaan bersih negatif — total aset lebih kecil dari total utang.' },
+  { level: 1, label: 'Terjerat utang', emoji: '🚨', note: 'Utang masih lebih besar dari kekayaan.', criteria: 'Utang lebih besar dari kekayaan bersih.' },
+  { level: 2, label: 'Terlihat kaya', emoji: '💅', note: 'Uang tunai lebih kecil dari utang.', criteria: 'Kekayaan bersih positif, tapi utang masih lebih besar dari uang tunai/tabungan.' },
+  { level: 3, label: 'Gaji ke gaji', emoji: '🔁', note: 'Belum punya dana darurat 1 bulan.', criteria: 'Utang aman, tapi dana darurat masih kurang dari 1 bulan pengeluaran.' },
+  { level: 4, label: 'Punya dana darurat', emoji: '🛟', note: 'Dana darurat minimal 1 bulan pengeluaran.', criteria: 'Punya dana darurat ≥ 1 bulan pengeluaran, tapi aset belum cukup untuk pensiun (< 15× pengeluaran tahunan).' },
+  { level: 5, label: 'Dana pensiun', emoji: '🌅', note: 'Aset cukup untuk biaya hidup sampai pensiun.', criteria: 'Aset cukup membiayai hidup sampai pensiun (15–30× pengeluaran tahunan).' },
+  { level: 6, label: 'Punya warisan', emoji: '👑', note: 'Aset melebihi kebutuhan seumur hidup.', criteria: 'Aset melebihi kebutuhan seumur hidup (> 30× pengeluaran tahunan) — cukup untuk warisan.' },
 ];
+
+/** The full ladder, each level marked whether it is the user's current level. */
+export function wealthLadder(currentLevel) {
+  return LEVELS.map((l) => ({ ...l, current: l.level === currentLevel }));
+}
 
 /**
  * "Level Kekayaan" ladder 0-6. Each level is a strictly harder gate than the

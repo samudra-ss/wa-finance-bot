@@ -170,7 +170,44 @@ function renderHero(d) {
   $('#expense').textContent = idr(d.monthlyExpense);
 
   const lvl = d.level;
-  $('#level-badge').innerHTML = `${lvl.emoji} Level ${lvl.level} — ${lvl.label}<small>${lvl.note}</small>`;
+  $('#level-badge').innerHTML =
+    `<span class="level-main">${lvl.emoji} Level ${lvl.level} — ${escapeHtml(lvl.label)}<small>${escapeHtml(lvl.note)}</small></span>` +
+    '<span class="level-more">Detail ›</span>';
+}
+
+// ---------------------------------------------------------------- level popup
+
+function renderLevelLadder() {
+  const ladder = state.dashboard?.levelLadder;
+  const el = $('#level-ladder');
+  if (!el) return;
+  if (!ladder?.length) {
+    el.innerHTML = '<li class="empty">Data level belum tersedia.</li>';
+    return;
+  }
+  // Highest level at top (6 → 0), matching the Excel "Level Kekayaan" ladder.
+  el.innerHTML = [...ladder]
+    .sort((a, b) => b.level - a.level)
+    .map(
+      (l) => `<li class="${l.current ? 'current' : ''}">
+        <span class="lvl-emoji">${l.emoji}</span>
+        <span class="lvl-body">
+          <div class="lvl-title">Level ${l.level} — ${escapeHtml(l.label)}${l.current ? '<span class="here">Kamu di sini</span>' : ''}</div>
+          <div class="lvl-crit">${escapeHtml(l.criteria)}</div>
+        </span>
+      </li>`,
+    )
+    .join('');
+}
+
+function openLevelModal() {
+  if (!state.dashboard?.levelLadder) return;
+  renderLevelLadder();
+  $('#level-modal').classList.remove('hidden');
+}
+
+function closeLevelModal() {
+  $('#level-modal').classList.add('hidden');
 }
 
 const PALETTE = ['#0f766e', '#f59e0b', '#6366f1', '#ec4899', '#0891b2', '#84cc16', '#a855f7', '#64748b'];
@@ -531,6 +568,12 @@ function init() {
       renderLoans();
     }),
   );
+
+  $('#level-badge').addEventListener('click', openLevelModal);
+  $$('#level-modal [data-close]').forEach((el) => el.addEventListener('click', closeLevelModal));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeLevelModal();
+  });
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

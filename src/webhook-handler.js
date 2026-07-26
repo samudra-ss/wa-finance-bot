@@ -22,6 +22,7 @@ import {
   DEFAULT_CATEGORIES,
   DEFAULT_ACCOUNTS,
   HELP_TEXT,
+  DOCS_TEXT,
 } from './parser.js';
 import { sendText, formatIDR } from './whatsapp.js';
 import { issueLoginCode } from './auth.js';
@@ -110,9 +111,13 @@ async function routeMessage(ctx) {
   const lower = ctx.text.toLowerCase();
   if (lower === 'saldo') return replySaldo(ctx);
   if (lower === 'help' || lower === 'bantuan' || lower === 'menu') return ctx.reply(HELP_TEXT);
+  if (lower === 'panduan' || lower === 'dokumentasi' || lower === 'docs') return ctx.reply(DOCS_TEXT);
   if (lower === 'undo' || lower === 'hapus') return undoLast(ctx);
   if (lower === 'budget') return replyBudgets(ctx);
   if (lower.startsWith('budget ')) return setBudget(ctx);
+  if (lower.startsWith('kategori tambah ')) return addCategory(ctx, ctx.text.slice('kategori tambah '.length));
+  if (lower.startsWith('tambah kategori ')) return addCategory(ctx, ctx.text.slice('tambah kategori '.length));
+  if (lower === 'kategori' || lower === 'daftar kategori' || lower === 'kategori pengeluaran') return listCategories(ctx);
   if (lower === 'login' || lower === 'masuk') return sendLoginCode(ctx);
   if (lower === 'stop' || lower === 'berhenti') return setWeeklyOptIn(ctx, false);
   if (lower === 'mulai' || lower === 'lanjut') return setWeeklyOptIn(ctx, true);
@@ -396,6 +401,63 @@ async function setBudget(ctx) {
     update: { limit: money.amount },
   });
   await ctx.reply(`📌 Budget ${catMatch.item.name} bulan ${month}: ${formatIDR(money.amount)}`);
+}
+
+// ---------------------------------------------------------------- categories
+
+async function listCategories(ctx) {
+  const cats = ctx.user.categories;
+  const expense = cats.filter((c) => c.kind === 'EXPENSE').map((c) => c.name);
+  const income = cats.filter((c) => c.kind === 'INCOME').map((c) => c.name);
+  const lines = [
+    '🏷️ Kategori kamu:',
+    '',
+    'Pengeluaran:',
+    ...(expense.length ? expense.map((nm) => `• ${nm}`) : ['• (belum ada)']),
+    '',
+    'Pemasukan:',
+    ...(income.length ? income.map((nm) => `• ${nm}`) : ['• (belum ada)']),
+    '',
+    'Tambah baru: "kategori tambah <nama>"',
+  ];
+  await ctx.reply(lines.join('\n'));
+}
+
+async function addCategory(ctx, raw) {
+  let kind = 'EXPENSE';
+  let name = (raw ?? '').trim();
+  const low = name.toLowerCase();
+  if (low.startsWith('pemasukan ')) {
+    kind = 'INCOME';
+    name = name.slice('pemasukan '.length);
+  } else if (low.startsWith('pengeluaran ')) {
+    kind = 'EXPENSE';
+    name = name.slice('pengeluaran '.length);
+  }
+  name = name.replace(/\s+/g, ' ').trim();
+
+  if (!name) return ctx.reply('Nama kategori kosong. Contoh: "kategori tambah Zakat"');
+  if (name.length > 40) return ctx.reply('Nama kategori terlalu panjang (maksimal 40 karakter).');
+
+  const clash = ctx.user.categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (clash) return ctx.reply(`Kategori "${clash.name}" sudah ada.`);
+
+  try {
+    // Store the lowercased name as an alias so the parser matches it regardless of case.
+    const cat = await prisma.category.create({
+      data: { userId: ctx.user.id, name, kind, aliases: [name.toLowerCase()] },
+    });
+    ctx.user.categories.push(cat); // keep the in-memory user current for this request
+    const kindLabel = kind === 'INCOME' ? 'pemasukan' : 'pengeluaran';
+    await ctx.reply(
+      `🏷️ Kategori ${kindLabel} "${name}" ditambahkan.\nLangsung bisa dipakai, contoh: "${name.toLowerCase()} 50rb".`,
+    );
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return ctx.reply(`Kategori "${name}" sudah ada.`);
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------- loans & goals
